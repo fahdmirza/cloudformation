@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion:
+  2010-09-09
+Description: Create an NGINX reverse proxy for SQL Server
+Parameters:
+  vpc:
+    Description: Select VPC
+    Type: 'AWS::EC2::VPC::Id'
+  AmiId:
+    Description: AMI that will be used to deploy this instance from
+    Type: AWS::EC2::Image::Id
+    Default: ami-0b669d7f6e353905a
+  InstanceType:
+    Description: Size of the Server instance
+    Type: String
+    Default: t3.medium
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet where the EC2 Instance should be created
+  HostName:
+    Type: String
+    Description: This is the new Hostname for the instance
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Key Pair name for admin password decryption
+  TargetServer:
+    Type: String
+    Description: The server to forward the connection to
+  TargetPort:
+    Type: String
+    Description: The port to forward the connection on
+
+Resources:
+    InstanceSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Allow all traffic from 10.0.0.0 to host
+            VpcId:
+                Ref: vpc
+            SecurityGroupIngress:
+            - IpProtocol: tcp
+              FromPort: 22
+              ToPort: 22
+              CidrIp: 10.0.0.0/16
+            SecurityGroupEgress:
+            - IpProtocol: tcp
+              FromPort: 22
+              ToPort: 22
+              CidrIp: 10.0.0.0/16
+    MyEc2Instance:
+        Type: AWS::EC2::Instance
+        Properties:
+            ImageId: !Ref AmiId
+            InstanceType: !Ref InstanceType
+            SubnetId: !Ref SubnetId
+            SecurityGroupIds:
+            - !Ref InstanceSecurityGroup
+            KeyName: 
+                Ref: KeyName
+            UserData:
+                Fn::Base64: !Sub |
+                    #!/bin/bash
+                    sudo /opt/bitnami/ctlscript.sh stop nginx
+                    sleep 15s
+                    mv /opt/bitnami/nginx/conf/nginx.conf /opt/bitnami/nginx/conf/nginx.conf.old
+                    touch /opt/bitnami/nginx/conf/nginx.conf
+                    chown bitnami:root /opt/bitnami/nginx/conf/nginx.conf
+                    chmod 664 /opt/bitnami/nginx/conf/nginx.conf
+                    cat >/opt/bitnami/nginx/conf/nginx.conf <<EOL
+                    user daemon daemon;
+                    worker_processes auto;
+                    error_log /opt/bitnami/nginx/logs/error.log;
+                    pid /opt/bitnami/nginx/tmp/nginx.pid;
+                    events {
+                        worker_connections 1024;
+                    }
+                    stream {
+                        upstream target_server {
+                            server ${TargetServer}:${TargetPort};
+                        }
+                        server {
+                            listen ${TargetPort};
+                            proxy_pass target_server; }
+                    }
+                    EOL
+                    sleep 5s
+                    sudo /opt/bitnami/ctlscript.sh stop nginx
+                    sleep 5s
+                    sudo /opt/bitnami/ctlscript.sh start nginx
+Outputs:
+    Name:
+        Value: !Ref 'AWS::StackName'
+        Export:
+            Name: !Sub '${AWS::StackName}-Name'
